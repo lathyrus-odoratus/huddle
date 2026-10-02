@@ -62,3 +62,4 @@
   - [0005 主辦與主持人分離](docs/adr/0005-organizer-facilitator-separation.md)
   - [0006 Event 手動生命週期與破冰盲揭](docs/adr/0006-manual-event-lifecycle-and-blind-reveal.md)
   - [0007 staging 與 production 環境](docs/adr/0007-staging-and-production-environments.md)
+  - [0008 依 12-Factor 調整設定、建置與執行方式](docs/adr/0008-twelve-factor-adjustments.md)

@@ -254,6 +254,14 @@ Discord          │  └─ /interactions slash command                      �
 - 動畫以「收到訊息時開始、持續 `durationMs`」播放，容許各端數百毫秒的誤差。
 - 手動揭曉同樣經過 DO 以保持序列化，`durationMs` 為一段較短的揭曉動畫。
 
+### 5.3 DO 被回收時的處理
+
+使用 Hibernation 時，DO 閒置就會被移出記憶體，**記憶體中的變數隨時可能消失**。所以：
+
+- **presence**：每條 WebSocket 用 `serializeAttachment()` 存 `userId`；喚醒時以 `ctx.getWebSockets()` 重建線上名單，不依賴記憶體中的 Map。
+- **spin 狀態**：寫入 DO storage；計時一律用 **DO alarm**（會持久化，DO 被回收也會觸發），不使用 `setTimeout`。
+- **client**：斷線後以指數退避重連（含 jitter），重新取得 ticket，連上後由 `room.snapshot` 補齊狀態。
+
 ---
 
 ## 6. 資料模型（D1）
@@ -333,6 +341,7 @@ notices
 
 | Method | Path | 說明 |
 | --- | --- | --- |
+| GET | `/api/config` | 公開的執行時設定（`discordClientId`、`appUrl` 等），不需登入；見 §11.1 |
 | POST | `/api/auth/activity` | `{ code }` → `{ discordAccessToken, sessionToken, user }` |
 | GET | `/auth/discord/login` | 網頁 OAuth 起點（帶 `state`） |
 | GET | `/auth/discord/callback` | 設定 session cookie 後導回 app |
@@ -420,6 +429,7 @@ notices
 - 連線：`POST /api/events/:id/ws-ticket` 取得短效 ticket（約 30 秒，綁定 user 與 event 的簽章 token）→ `wss://<domain>/ws?ticket=…`。Worker 驗證 ticket 與成員資格後，帶 `userId` 轉給 DO。不把 sessionToken 放在 query string。
 - 表情反應在 DO 內針對每位使用者節流（例如每秒 3 個）。
 - 前端收到事件後直接更新 TanStack Query 的快取。
+- 斷線重連策略見 §5.3。
 
 ---
 
@@ -428,6 +438,8 @@ notices
 ### 9.1 Activity 入口
 
 ```
+GET /api/config → discordClientId
+  → new DiscordSDK(discordClientId)
 SDK ready → sdk.commands.authorize({ scope: ['identify', 'guilds.members.read'] }) → code
   → POST /api/auth/activity { code, guildId? }
        Worker：用 client secret 換 Discord access token
@@ -480,7 +492,11 @@ SDK ready → sdk.commands.authorize({ scope: ['identify', 'guilds.members.read'
 | i18n | vue-i18n；zh-TW、en。初始語系取 Discord `locale`，可在設定中改 |
 | 主題 | 預設深色（與 Discord 一致），網頁版可切換淺色/深色 |
 
-### Activity 特有處理
+### 11.1 執行時設定
+
+前端 build **不包含任何因環境而異的值**（不使用 `import.meta.env` 放環境設定），所有環境部署**同一份** `dist`。啟動時呼叫 `GET /api/config` 取得公開設定（例如 `discordClientId`、`appUrl`），由 Worker 從自己的環境變數組出。機密絕不出現在這個 endpoint。
+
+### 11.2 Activity 特有處理
 
 1. **路由**：依 URL 是否有 `frame_id` 判斷入口。Activity 用 `createMemoryHistory`（保留 SDK 需要的 query 參數），網頁用 `createWebHistory`。同一份 build。
 2. **外部資源**：Discord 頭像 `cdn.discordapp.com` 先實測能否在 Activity 內直接載入；不行則加 URL Mapping 並在啟動時呼叫 `patchUrlMappings`。
@@ -524,16 +540,39 @@ SDK ready → sdk.commands.authorize({ scope: ['identify', 'guilds.members.read'
 - 本機也可用 `pnpm deploy:staging` 在 merge 前先推上 staging。
 - 密集除錯 Activity 時可臨時開 cloudflared quick tunnel。
 
-### CI/CD（GitHub Actions）
+### 13.1 Build、Release、Run
+
+- **每個 commit 只 build 一次**：CI 產出 Worker bundle 與 web `dist`，存成 artifact。
+- staging 與 production **部署同一份 artifact**；production **只能部署已在 staging 部署過的 commit**。
+- 每次 deploy 產生不可變的 Worker version ID，可以用 `wrangler rollback` 回退。
+- 執行時設定由各環境自己提供（見 §11.1、§13.3），不寫進 artifact。
+
+### 13.2 CI/CD（GitHub Actions）
 
 - PR：typecheck、lint、test。
-- `main`：`wrangler d1 migrations apply --env staging` → `wrangler deploy --env staging`。
-- tag `v*` 或手動：同上，`--env production`。
+- `main`：build → 上傳 artifact → `wrangler d1 migrations apply --env staging` → 部署到 staging。
+- tag `v*` 或手動觸發：取出**同一個 commit** 的 artifact → `migrations apply --env production` → 部署到 production。
+- 使用 GitHub Environments（`staging`、`production`）分開存放各環境的機密；production 可設定需要人工核准。
 - CI 使用最小權限的 Cloudflare API Token（Workers Scripts、D1、`miao-bao.cc` 的 Workers Routes）。
 
-### 設定與機密
+**Migration 規則（expand / contract）**：migration 在 deploy 之前套用，rollback 時也會出現「舊程式碼面對新 schema」的狀況，所以**任何單一 migration 都不能讓前一版程式碼壞掉**。要刪除或改名欄位時分兩次 release：先新增並讓程式碼改用新欄位，下一次 release 才刪除舊欄位。
 
-> **待定**：需要的環境變數與機密清單（Discord client id/secret、public key、ws ticket 簽章金鑰、初始 admin 名單等），以及是否改以標準 remote vault 方式注入，留到實作前再決定。
+### 13.3 設定與機密
+
+- **`wrangler.jsonc`**：只放基礎設施拓撲（binding 名稱、D1 綁定、route 與網域），不放機密，也盡量不放會因環境改變的應用設定。
+- **應用設定與機密**：一律從環境注入到 Worker 的環境變數 / secret。
+
+| 名稱（暫定） | 類型 | 說明 |
+| --- | --- | --- |
+| `DISCORD_CLIENT_ID` | 設定（公開） | 也經 `/api/config` 提供給前端 |
+| `DISCORD_CLIENT_SECRET` | 機密 | OAuth code 交換 |
+| `DISCORD_PUBLIC_KEY` | 設定（公開） | 驗證 interactions 簽章 |
+| `APP_URL` | 設定 | 該環境的網址，用於 OAuth redirect 與 slash command 回應 |
+| `ADMIN_DISCORD_IDS` | 設定 | 初始 admin 名單 |
+| `WS_TICKET_SECRET` | 機密 | WS ticket 簽章金鑰 |
+| `CLOUDFLARE_API_TOKEN` | 機密（僅 CI） | 部署用 |
+
+> **待定**：機密的來源與注入方式（GitHub Environments + `wrangler secret`，或採用外部 secret manager）。
 
 ---
 
@@ -554,6 +593,9 @@ huddle/
   - E2E：MVP 不做。
 - Lint/format：ESLint flat config + Prettier。
 - 觀測：Workers Logs；MVP 不接 Sentry。
+- **Log 格式**：一律輸出結構化 JSON，例如 `{ level, msg, requestId, userId, eventId, ... }`，方便在 Workers Logs 依欄位查詢，之後接 Logpush 也不用改程式。不記錄 token、cookie、破冰回答內容。
+- **一次性管理工作**：補資料、修正狀態這類工作，寫成 `apps/worker/scripts/*` 或 admin API，跟主程式**使用同一份程式碼與 schema**，針對指定環境執行。不在 D1 console 手動下 SQL；緊急狀況例外，但事後要補成 script。
+- 依賴：`wrangler` 等工具都列為 devDependency 並鎖版本，CI 不使用全域安裝。
 
 ---
 
@@ -561,7 +603,8 @@ huddle/
 
 | 項目 | 處理時機 |
 | --- | --- |
-| 環境變數與機密清單、是否使用 remote vault 注入 | 實作前 |
+| 機密的來源與注入方式（GitHub Environments 或外部 secret manager） | 實作前 |
+| 預先 build 的 Worker bundle 如何部署到不同環境（`--no-bundle` 等做法） | 建立 CI 時驗證 |
 | `cdn.discordapp.com` 在 Activity 內能否直接載入 | 開發初期 spike |
 | 揭曉動畫 `durationMs` 數值、表情節流參數 | 實作時調整 |
 
