@@ -572,7 +572,18 @@ SDK ready → sdk.commands.authorize({ scope: ['identify', 'guilds.members.read'
 | `WS_TICKET_SECRET` | 機密 | WS ticket 簽章金鑰 |
 | `CLOUDFLARE_API_TOKEN` | 機密（僅 CI） | 部署用 |
 
-> **待定**：機密的來源與注入方式（GitHub Environments + `wrangler secret`，或採用外部 secret manager）。
+**機密來源：GitHub Environments secret**（見 [ADR 0009](./adr/0009-secrets-via-github-environments.md)）
+
+| 位置 | 內容 |
+| --- | --- |
+| GitHub Environment `staging` / `production` | 各環境的 `DISCORD_CLIENT_SECRET`、`WS_TICKET_SECRET`、`CLOUDFLARE_API_TOKEN`，以及非機密的應用設定（以 Environment variables 存放） |
+| Cloudflare Worker | 部署時由 CI 以 `wrangler secret` / `--var` 寫入，執行時從 `env` 讀取 |
+| 本機 `.dev.vars` | 只放 staging Discord App 的值，不進版控；提供 `.dev.vars.example` |
+
+**Cloudflare API token 的保護**（Cloudflare 不支援 GitHub OIDC，只能使用長期 token）：
+- 只給 Workers Scripts、D1、`miao-bao.cc` Workers Routes 的編輯權限。
+- 設定到期日（1 年），到期前輪換。
+- 只存在 GitHub Environment 中；`production` 部署需要人工核准。
 
 ---
 
@@ -603,7 +614,6 @@ huddle/
 
 | 項目 | 處理時機 |
 | --- | --- |
-| 機密的來源與注入方式（GitHub Environments 或外部 secret manager） | 實作前 |
 | 預先 build 的 Worker bundle 如何部署到不同環境（`--no-bundle` 等做法） | 建立 CI 時驗證 |
 | `cdn.discordapp.com` 在 Activity 內能否直接載入 | 開發初期 spike |
 | 揭曉動畫 `durationMs` 數值、表情節流參數 | 實作時調整 |

@@ -17,7 +17,7 @@
 | --- | --- |
 | 需求與規格討論 | ✅ 完成 |
 | Repo 與文件 | ✅ 完成 |
-| 機密與環境變數管理方式 | ⏳ 待決定 |
+| 機密與環境變數管理方式 | ✅ 定案（GitHub Environments） |
 | 專案骨架（pnpm workspace、Worker、Vue、shared） | ⬜ |
 | Cloudflare 環境（staging / production、D1、網域） | ⬜ |
 | Discord Applications（Staging / Production） | ⬜ |
@@ -54,6 +54,7 @@
 
 - [技術規格](docs/spec.md)
 - [初始需求](docs/initial-requirements.md)
+- [12-Factor 實踐狀況](docs/twelve-factor.md)
 - 架構決策（ADR）
   - [0001 採用 Cloudflare 全家桶與 Vue 3](docs/adr/0001-cloudflare-and-vue.md)
   - [0002 獨立 Web App，Activity 為入口之一；不做主動推播](docs/adr/0002-standalone-webapp-with-activity-entry.md)
@@ -63,3 +64,4 @@
   - [0006 Event 手動生命週期與破冰盲揭](docs/adr/0006-manual-event-lifecycle-and-blind-reveal.md)
   - [0007 staging 與 production 環境](docs/adr/0007-staging-and-production-environments.md)
   - [0008 依 12-Factor 調整設定、建置與執行方式](docs/adr/0008-twelve-factor-adjustments.md)
+  - [0009 機密以 GitHub Environments secret 管理](docs/adr/0009-secrets-via-github-environments.md)
